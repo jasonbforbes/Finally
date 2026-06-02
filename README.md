@@ -1,61 +1,69 @@
 # FinAlly — AI Trading Workstation
 
-A visually stunning AI-powered trading workstation that streams live market data, simulates portfolio trading, and integrates an LLM chat assistant that can analyze positions and execute trades via natural language.
+A Bloomberg-inspired AI trading workstation that streams live market data, runs a simulated portfolio, and lets an LLM chat assistant analyze positions and execute trades on the user's behalf.
 
-Built entirely by coding agents as a capstone project for an agentic AI coding course.
+Built entirely by coding agents as a capstone project for an agentic AI coding course. Agents coordinate through specs in `planning/`.
 
-## Features
+## Status
 
-- **Live price streaming** via SSE with green/red flash animations
-- **Simulated portfolio** — $10k virtual cash, market orders, instant fills
-- **Portfolio visualizations** — heatmap (treemap), P&L chart, positions table
-- **AI chat assistant** — analyzes holdings, suggests and auto-executes trades
-- **Watchlist management** — track tickers manually or via AI
-- **Dark terminal aesthetic** — Bloomberg-inspired, data-dense layout
+In active development.
 
-## Architecture
+- **Backend / market data** — complete. GBM simulator and Polygon.io (Massive) client behind a shared interface, in-memory price cache, SSE stream endpoint. See [`planning/MARKET_DATA_SUMMARY.md`](planning/MARKET_DATA_SUMMARY.md).
+- **Portfolio, chat, frontend, Docker packaging** — not yet built.
 
-Single Docker container serving everything on port 8000:
+## Vision
 
-- **Frontend**: Next.js (static export) with TypeScript and Tailwind CSS
-- **Backend**: FastAPI (Python/uv) with SSE streaming
-- **Database**: SQLite with lazy initialization
-- **AI**: LiteLLM → OpenRouter (Cerebras inference) with structured outputs
-- **Market data**: Built-in GBM simulator (default) or Massive API (optional)
+- Live price streaming via SSE with green/red flash animations
+- Simulated portfolio — $10k virtual cash, market orders, instant fill
+- Portfolio visualizations — treemap heatmap, P&L chart, positions table
+- AI chat assistant — analyzes holdings, suggests and auto-executes trades and watchlist changes
+- Single Docker container serving Next.js static export + FastAPI on port 8000
+- SQLite with lazy initialization; no signup, no login
 
-## Quick Start
+Full specification: [`planning/PLAN.md`](planning/PLAN.md).
+
+## Tech Stack
+
+- **Backend** — FastAPI, Python 3.12, managed with `uv`
+- **Frontend** (planned) — Next.js + TypeScript + Tailwind, exported as static files
+- **Database** — SQLite, volume-mounted
+- **Real-time** — Server-Sent Events
+- **AI** — LiteLLM → OpenRouter, `openrouter/openai/gpt-oss-120b` on Cerebras, structured outputs
+- **Market data** — built-in GBM simulator (default) or Massive / Polygon.io (with `MASSIVE_API_KEY`)
+
+## Running the Backend
 
 ```bash
-# Clone and configure
-cp .env.example .env
-# Add your OPENROUTER_API_KEY to .env
-
-# Run with Docker
-docker build -t finally .
-docker run -v finally-data:/app/db -p 8000:8000 --env-file .env finally
-
-# Open http://localhost:8000
+cd backend
+uv sync
+uv run python market_data_demo.py     # rich terminal demo of the live price stream
+uv run pytest                          # backend tests
 ```
 
-## Environment Variables
+See [`backend/README.md`](backend/README.md) for details.
+
+## Environment
+
+Copy `.env.example` to `.env` at the project root:
 
 | Variable | Required | Description |
 |---|---|---|
-| `OPENROUTER_API_KEY` | Yes | OpenRouter API key for AI chat |
-| `MASSIVE_API_KEY` | No | Massive (Polygon.io) key for real market data; omit to use simulator |
-| `LLM_MOCK` | No | Set `true` for deterministic mock LLM responses (testing) |
+| `OPENROUTER_API_KEY` | Yes (for chat) | OpenRouter API key |
+| `MASSIVE_API_KEY` | No | Polygon.io key for real market data; omit to use the simulator |
+| `LLM_MOCK` | No | `true` for deterministic mock LLM responses (testing) |
+| `CHAT_HISTORY_LIMIT` | No | Rows of chat history passed to the LLM (default 20) |
+| `LLM_TIMEOUT_SECONDS` | No | Per-call LLM timeout (default 30) |
 
-## Project Structure
+## Repository Layout
 
 ```
 finally/
-├── frontend/    # Next.js static export
-├── backend/     # FastAPI uv project
-├── planning/    # Project documentation and agent contracts
-├── test/        # Playwright E2E tests
-├── db/          # SQLite volume mount (runtime)
-└── scripts/     # Start/stop helpers
+├── backend/    # FastAPI uv project (market data complete)
+├── planning/   # Specs and agent contracts — start with PLAN.md
+└── README.md
 ```
+
+`frontend/`, `test/`, `scripts/`, `db/`, and the `Dockerfile` will be added as those components are built.
 
 ## License
 
