@@ -5,8 +5,8 @@
 **Verdict:** Solid, well-structured, ships as documented. All tests pass and lint is clean. The two priority items from this review — the Massive timestamp unit bug and the SSE-endpoint test gap — have since been **resolved** (see the Update below); the remaining findings are low-severity polish.
 
 > **Update — 2026-06-06 (post-review fixes):**
-> - **HIGH (timestamp)** and **MEDIUM (SSE tests)** findings are **RESOLVED**. See each finding for details.
-> - Suite grew from 73 → **80 tests passing**; total coverage **91% → 98%**; `stream.py` **33% → 97%**. Lint still clean.
+> - **All findings are now RESOLVED** — HIGH (timestamp), MEDIUM (SSE tests), and the LOW/INFO polish items (global router, ticker normalization, deprecated fixture, doc drift). See each finding for details.
+> - Suite grew from 73 → **82 tests passing**; total coverage **91% → 98%**; `stream.py` **33% → 97%**; test-suite warnings eliminated. Lint still clean.
 
 ---
 
@@ -70,25 +70,34 @@ Coverage is 33%; the `_generate_events` async generator is the most behavior-ric
 
 These read as correct but are load-bearing for the frontend and deserve coverage (FastAPI `TestClient` / `httpx` streaming, or by calling `_generate_events` directly with a fake `Request`).
 
-### LOW — `create_stream_router` mutates a module-global router
+### LOW — `create_stream_router` mutates a module-global router  ✅ RESOLVED (2026-06-06)
+
+> **Fixed.** The `APIRouter` is now constructed inside `create_stream_router`, so each call returns a fresh single-route router. The test helper's last-match workaround was simplified accordingly.
+
 
 `stream.py:17` defines `router = APIRouter(...)` at module scope, and `create_stream_router` registers the route onto that shared global. Calling the factory more than once would register the `/prices` route repeatedly on the same router instance. It is only called once today, but the factory pattern implies reusability. Prefer constructing `APIRouter` *inside* the function and returning it, so each call yields an independent, single-route router.
 
-### LOW — Ticker normalization differs between the two sources
+### LOW — Ticker normalization differs between the two sources  ✅ RESOLVED (2026-06-06)
 
-`MassiveDataSource.add_ticker/remove_ticker` apply `.upper().strip()`; `SimulatorDataSource`/`GBMSimulator` do not. In simulator mode, `add_ticker("aapl")` would create a *new* lowercase ticker with a random $50–$300 seed price rather than matching `AAPL`. The two implementations of the same interface therefore behave differently for un-normalized input. This is presumably masked by validation/normalization at the (not-yet-built) API layer, but the interface contract should be consistent — normalize in both, or document that callers must pass canonical symbols.
+> **Fixed.** `SimulatorDataSource.add_ticker/remove_ticker` now apply `.upper().strip()`, matching `MassiveDataSource`, so both interface implementations handle un-normalized input identically. Added two tests (`test_add_ticker_normalizes`, `test_remove_ticker_normalizes`). The simulator universe guard (rejecting non-seeded tickers with `UNKNOWN_TICKER`) is deliberately left to the not-yet-built API layer rather than baked into the generic `GBMSimulator`; flagged here so it isn't forgotten when the watchlist API lands.
+
+`MassiveDataSource.add_ticker/remove_ticker` apply `.upper().strip()`; `SimulatorDataSource`/`GBMSimulator` do not (original). In simulator mode, `add_ticker("aapl")` would create a *new* lowercase ticker with a random $50–$300 seed price rather than matching `AAPL`. The two implementations of the same interface therefore behave differently for un-normalized input. This is presumably masked by validation/normalization at the (not-yet-built) API layer, but the interface contract should be consistent — normalize in both, or document that callers must pass canonical symbols.
 
 ### LOW — Simulator does not enforce the locked ticker universe
 
 `PLAN.md` §7 / `MARKET_SIMULATOR.md` §1 state simulator mode is locked to the 10 seeded tickers and adds outside that set return `400 UNKNOWN_TICKER`. `GBMSimulator.add_ticker` happily adds any symbol (random seed price, `DEFAULT_PARAMS`). This is acceptable *if* the API layer enforces the universe before calling `add_ticker`, but that enforcement does not exist in the market layer — worth a deliberate decision about where the guard lives so it isn't forgotten when the watchlist API is built.
 
-### INFO — Test-suite warnings
+### INFO — Test-suite warnings  ✅ RESOLVED (2026-06-06)
 
-`conftest.py:11` overrides `event_loop_policy` with `asyncio.DefaultEventLoopPolicy()`, which is deprecated (removal in Python 3.16) and produces 73 `DeprecationWarning`s. The fixture override appears unnecessary with modern `pytest-asyncio` (`asyncio_mode = "auto"` is already set). Consider removing the fixture.
+> **Fixed.** Deleted `tests/conftest.py` — its only content was the `event_loop_policy` override returning `asyncio.DefaultEventLoopPolicy()` (deprecated; removal in Python 3.16), which merely duplicated `pytest-asyncio`'s default under `asyncio_mode = "auto"`. The suite now runs with zero warnings.
 
-### INFO — Doc drift in `MARKET_DATA_SUMMARY.md`
+`conftest.py:11` overrides `event_loop_policy` with `asyncio.DefaultEventLoopPolicy()`, which is deprecated (removal in Python 3.16) and produces 73 `DeprecationWarning`s (original). The fixture override appears unnecessary with modern `pytest-asyncio` (`asyncio_mode = "auto"` is already set).
 
-The summary reports "84% overall, massive_client.py 56%"; this run shows 91% / 94%. Numbers are stale, not wrong-in-kind. Minor — refresh when convenient.
+### INFO — Doc drift in `MARKET_DATA_SUMMARY.md`  ✅ RESOLVED (2026-06-06)
+
+> **Fixed.** Refreshed the summary's Test Suite table to current reality: 82 tests across 7 modules, `test_stream.py` added, `massive_client.py` 94%, overall 98%.
+
+The summary reported "84% overall, massive_client.py 56%"; the review run showed 91% / 94%. Numbers were stale, not wrong-in-kind (original).
 
 ### INFO — Environment
 
@@ -111,8 +120,8 @@ Tests were run under CPython 3.14.5 (uv auto-created the venv), while `pyproject
 
 1. ~~**Fix the Massive timestamp divisor** (`/1000.0` → `/1_000_000_000`) and correct the masking test.~~ (HIGH) — ✅ **DONE 2026-06-06**
 2. ~~**Add SSE tests** for `stream.py` covering initial snapshot, empty-cache hold-open, change-detection, and disconnect.~~ (MEDIUM) — ✅ **DONE 2026-06-06**
-3. Build `create_stream_router` to instantiate its own `APIRouter`. (LOW) — open
-4. Decide where ticker normalization and the simulator universe guard live; make the two sources consistent. (LOW) — open
-5. Drop the deprecated `event_loop_policy` fixture; refresh the summary's coverage numbers. (INFO) — open
+3. ~~Build `create_stream_router` to instantiate its own `APIRouter`.~~ (LOW) — ✅ **DONE 2026-06-06**
+4. ~~Decide where ticker normalization and the simulator universe guard live; make the two sources consistent.~~ (LOW) — ✅ **DONE 2026-06-06** (normalization unified; universe guard deferred to the API layer by design)
+5. ~~Drop the deprecated `event_loop_policy` fixture; refresh the summary's coverage numbers.~~ (INFO) — ✅ **DONE 2026-06-06**
 
-The two priority items (1–2) are resolved, so the Massive path and the live frontend chart can now be trusted on the timestamp/SSE contracts. The remaining items (3–5) are low-severity polish and do not block the simulator-mode demo, which is the default path and is in good shape.
+All review items are resolved. The Massive path and live frontend chart can be trusted on the timestamp/SSE contracts, the two data sources behave consistently, and the test suite runs clean (82 passing, 98% coverage, zero warnings). The only intentionally deferred item is the simulator ticker-universe guard, which belongs in the not-yet-built watchlist API layer rather than the generic market-data layer.

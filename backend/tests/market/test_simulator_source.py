@@ -71,6 +71,30 @@ class TestSimulatorDataSource:
 
         await source.stop()
 
+    async def test_add_ticker_normalizes(self):
+        """Tickers are upper-cased and stripped, matching MassiveDataSource."""
+        cache = PriceCache()
+        source = SimulatorDataSource(price_cache=cache, update_interval=0.1)
+        await source.start(["AAPL"])
+
+        await source.add_ticker("  tsla  ")
+        assert "TSLA" in source.get_tickers()
+        assert cache.get("TSLA") is not None
+
+        await source.stop()
+
+    async def test_remove_ticker_normalizes(self):
+        """Removal normalizes the ticker before dropping it."""
+        cache = PriceCache()
+        source = SimulatorDataSource(price_cache=cache, update_interval=0.1)
+        await source.start(["AAPL", "TSLA"])
+
+        await source.remove_ticker("  tsla  ")
+        assert "TSLA" not in source.get_tickers()
+        assert cache.get("TSLA") is None
+
+        await source.stop()
+
     async def test_get_tickers(self):
         """Test getting the list of active tickers."""
         cache = PriceCache()

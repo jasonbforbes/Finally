@@ -156,14 +156,10 @@ async def test_disconnect_ends_stream():
 
 
 def _prices_route(router):
-    """The most recently registered /api/stream/prices route.
-
-    create_stream_router currently registers onto a module-global router, so
-    repeated calls accumulate routes; take the last match to get this call's.
-    """
+    """The /api/stream/prices route on a freshly created router."""
     matches = [r for r in router.routes if getattr(r, "path", None) == "/api/stream/prices"]
     assert matches, "stream router did not register /api/stream/prices"
-    return matches[-1]
+    return matches[0]
 
 
 def test_router_registers_prices_route():

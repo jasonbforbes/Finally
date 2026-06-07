@@ -240,6 +240,7 @@ class SimulatorDataSource(MarketDataSource):
         logger.info("Simulator stopped")
 
     async def add_ticker(self, ticker: str) -> None:
+        ticker = ticker.upper().strip()
         if self._sim:
             self._sim.add_ticker(ticker)
             # Seed cache immediately so the ticker has a price right away
@@ -249,6 +250,7 @@ class SimulatorDataSource(MarketDataSource):
             logger.info("Simulator: added ticker %s", ticker)
 
     async def remove_ticker(self, ticker: str) -> None:
+        ticker = ticker.upper().strip()
         if self._sim:
             self._sim.remove_ticker(ticker)
         self._cache.remove(ticker)
