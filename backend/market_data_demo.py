@@ -1,6 +1,6 @@
 """FinAlly Market Data Simulator Demo.
 
-Run with:  uv run market_data_demo.py
+Run with:  uv run market_data_demo.py [--duration SECONDS]
 
 Displays a live-updating terminal dashboard of simulated stock prices
 using the GBM simulator and Rich library.
@@ -8,6 +8,7 @@ using the GBM simulator and Rich library.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import time
 from collections import deque
@@ -29,7 +30,7 @@ SPARK_CHARS = "▁▂▃▄▅▆▇█"
 # Ordered ticker list matching the default watchlist
 TICKERS = ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "NVDA", "META", "JPM", "V", "NFLX"]
 
-DURATION = 60  # seconds
+DEFAULT_DURATION = 60  # seconds
 
 
 def sparkline(values: list[float]) -> str:
@@ -123,10 +124,11 @@ def build_dashboard(
     history: dict[str, deque],
     events: deque,
     start_time: float,
+    duration: float,
 ) -> Layout:
     """Build the full dashboard layout."""
     elapsed = time.time() - start_time
-    remaining = max(0, DURATION - elapsed)
+    remaining = max(0, duration - elapsed)
 
     layout = Layout()
     layout.split_column(
@@ -204,7 +206,7 @@ def print_summary(cache: PriceCache) -> None:
     console.print()
 
 
-async def run() -> None:
+async def run(duration: float = DEFAULT_DURATION) -> None:
     """Main demo loop."""
     cache = PriceCache()
     source = SimulatorDataSource(price_cache=cache, update_interval=0.5)
@@ -226,12 +228,12 @@ async def run() -> None:
 
     try:
         with Live(
-            build_dashboard(cache, history, events, start_time),
+            build_dashboard(cache, history, events, start_time, duration),
             refresh_per_second=4,
             screen=True,
         ) as live:
             last_version = cache.version
-            while time.time() - start_time < DURATION:
+            while time.time() - start_time < duration:
                 await asyncio.sleep(0.25)
 
                 # Check for updates
@@ -258,7 +260,7 @@ async def run() -> None:
                             f"${format_price(update.price)}"
                         )
 
-                live.update(build_dashboard(cache, history, events, start_time))
+                live.update(build_dashboard(cache, history, events, start_time, duration))
 
     except KeyboardInterrupt:
         pass
@@ -268,5 +270,18 @@ async def run() -> None:
     print_summary(cache)
 
 
+def main() -> None:
+    parser = argparse.ArgumentParser(description="FinAlly market data simulator demo.")
+    parser.add_argument(
+        "-d",
+        "--duration",
+        type=float,
+        default=DEFAULT_DURATION,
+        help=f"how long to run, in seconds (default: {DEFAULT_DURATION})",
+    )
+    args = parser.parse_args()
+    asyncio.run(run(args.duration))
+
+
 if __name__ == "__main__":
-    asyncio.run(run())
+    main()
