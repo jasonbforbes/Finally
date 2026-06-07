@@ -1,0 +1,118 @@
+# Market Data Backend — Code Review
+
+**Date:** 2026-06-06
+**Scope:** `backend/app/market/` (8 modules) and `backend/tests/market/` (6 test modules), reviewed against `PLAN.md`, `MARKET_INTERFACE.md`, `MARKET_SIMULATOR.md`, and `MASSIVE_API.md`.
+**Verdict:** Solid, well-structured, ships as documented. All tests pass and lint is clean. The two priority items from this review — the Massive timestamp unit bug and the SSE-endpoint test gap — have since been **resolved** (see the Update below); the remaining findings are low-severity polish.
+
+> **Update — 2026-06-06 (post-review fixes):**
+> - **HIGH (timestamp)** and **MEDIUM (SSE tests)** findings are **RESOLVED**. See each finding for details.
+> - Suite grew from 73 → **80 tests passing**; total coverage **91% → 98%**; `stream.py` **33% → 97%**. Lint still clean.
+
+---
+
+## 1. Test & Lint Results (reproduced)
+
+```
+uv run --extra dev pytest --cov=app
+80 passed, 80 warnings in 1.99s          # was 73 passed at original review
+
+uv run --extra dev ruff check app/ tests/
+All checks passed!
+```
+
+Coverage (Python 3.14.5; "orig" = original review, before the post-review fixes):
+
+| Module | Cover | Orig | Note |
+|---|---|---|---|
+| cache.py | 100% | 100% | |
+| factory.py | 100% | 100% | |
+| interface.py | 100% | 100% | |
+| models.py | 100% | 100% | |
+| seed_prices.py | 100% | 100% | |
+| simulator.py | 98% | 98% | |
+| massive_client.py | 94% | 94% | |
+| **stream.py** | **97%** | 33% | SSE generator now covered (1 line: `CancelledError` log handler) |
+| **TOTAL** | **98%** | 91% | |
+
+Independently verified beyond the suite:
+- The full 10-ticker correlation matrix is positive-definite — `np.linalg.cholesky` succeeds and 100 `step()` calls run clean. (No existing test exercises the full seeded set; the integration tests use 1–2 tickers.)
+
+---
+
+## 2. Findings
+
+### HIGH — Massive last-trade timestamp uses the wrong unit  ✅ RESOLVED (2026-06-06)
+
+> **Fixed.** `massive_client.py` now divides by `1_000_000_000`. `test_massive.py` was updated to feed realistic nanosecond inputs (helper param renamed `timestamp_ms` → `timestamp_ns`, literals `1707580800000` → `1707580800000000000`); the conversion test's `1707580800.0` assertion now genuinely guards the divisor — reverting to `/1000` makes it fail. 13 Massive tests pass.
+
+`massive_client.py:103` (original)
+```python
+timestamp = snap.last_trade.timestamp / 1000.0   # treats ns as ms
+```
+The v2 snapshot `last_trade.timestamp` is **nanoseconds** (see `MASSIVE_API.md` §4, which already flags this exact line). The correct divisor is `1_000_000_000`. Dividing by `1000` produces a cached `timestamp` of ~`1.7e15` — an epoch in the year ~54,000,000 — instead of ~`1.7e9`.
+
+Impact is limited to **Massive mode only** (the default simulator is unaffected, and the cached *price* is correct), but the price-SSE `timestamp` field is consumed by the frontend for charting (`PLAN.md` §6), so live charts in Massive mode would key off nonsensical times.
+
+**The unit test enshrines the bug.** `test_massive.py::test_timestamp_conversion` feeds `1707580800000` (a *millisecond* value, helper param literally named `timestamp_ms`) and asserts `== 1707580800.0`. Because the mock input is already milliseconds, the wrong `/1000` divisor produces a "correct"-looking result. Fixing the code requires updating the test to use a realistic nanosecond input and the `/1e9` divisor.
+
+**Fix:** change the divisor to `1_000_000_000` in `_poll_once`, and update the test (rename `timestamp_ms` → `timestamp_ns`, pass `1707580800000000000`, keep the `1707580800.0` expectation).
+
+### MEDIUM — SSE endpoint (`stream.py`) has no tests  ✅ RESOLVED (2026-06-06)
+
+> **Fixed.** Added `backend/tests/market/test_stream.py` (7 tests), taking `stream.py` from 33% → 97%. The generator is driven directly with a real `PriceCache` and a fake `Request`, collecting frames in a background drain task so the absence-assertions verify the stream *stayed silent* without a timeout-cancel closing the generator. Covered: retry directive, initial snapshot on connect (with wire-shape assertion), empty-cache hold-open, version-change-only emission, disconnect termination, and router wiring (route registration, media type, headers). The single remaining uncovered line is the defensive `except asyncio.CancelledError` log handler.
+
+Coverage is 33%; the `_generate_events` async generator is the most behavior-rich, spec-laden code in the subsystem and is uncovered. `PLAN.md` §6 and `CHANGE_REVIEW.md` (Batch 3) define several subtle contracts that are currently unverified by any test:
+
+- Initial full-snapshot emitted on connect/reconnect (`last_version = -1` achieves this — looks correct on read).
+- Empty-cache behavior: hold the connection open and emit the first real tick rather than sending `{}` (the `if prices:` guard achieves this — looks correct on read).
+- Disconnect detection via `request.is_disconnected()` breaking the loop.
+- The wire shape: flat dict-of-ticker, no envelope, no `version` field.
+
+These read as correct but are load-bearing for the frontend and deserve coverage (FastAPI `TestClient` / `httpx` streaming, or by calling `_generate_events` directly with a fake `Request`).
+
+### LOW — `create_stream_router` mutates a module-global router
+
+`stream.py:17` defines `router = APIRouter(...)` at module scope, and `create_stream_router` registers the route onto that shared global. Calling the factory more than once would register the `/prices` route repeatedly on the same router instance. It is only called once today, but the factory pattern implies reusability. Prefer constructing `APIRouter` *inside* the function and returning it, so each call yields an independent, single-route router.
+
+### LOW — Ticker normalization differs between the two sources
+
+`MassiveDataSource.add_ticker/remove_ticker` apply `.upper().strip()`; `SimulatorDataSource`/`GBMSimulator` do not. In simulator mode, `add_ticker("aapl")` would create a *new* lowercase ticker with a random $50–$300 seed price rather than matching `AAPL`. The two implementations of the same interface therefore behave differently for un-normalized input. This is presumably masked by validation/normalization at the (not-yet-built) API layer, but the interface contract should be consistent — normalize in both, or document that callers must pass canonical symbols.
+
+### LOW — Simulator does not enforce the locked ticker universe
+
+`PLAN.md` §7 / `MARKET_SIMULATOR.md` §1 state simulator mode is locked to the 10 seeded tickers and adds outside that set return `400 UNKNOWN_TICKER`. `GBMSimulator.add_ticker` happily adds any symbol (random seed price, `DEFAULT_PARAMS`). This is acceptable *if* the API layer enforces the universe before calling `add_ticker`, but that enforcement does not exist in the market layer — worth a deliberate decision about where the guard lives so it isn't forgotten when the watchlist API is built.
+
+### INFO — Test-suite warnings
+
+`conftest.py:11` overrides `event_loop_policy` with `asyncio.DefaultEventLoopPolicy()`, which is deprecated (removal in Python 3.16) and produces 73 `DeprecationWarning`s. The fixture override appears unnecessary with modern `pytest-asyncio` (`asyncio_mode = "auto"` is already set). Consider removing the fixture.
+
+### INFO — Doc drift in `MARKET_DATA_SUMMARY.md`
+
+The summary reports "84% overall, massive_client.py 56%"; this run shows 91% / 94%. Numbers are stale, not wrong-in-kind. Minor — refresh when convenient.
+
+### INFO — Environment
+
+Tests were run under CPython 3.14.5 (uv auto-created the venv), while `pyproject.toml` declares `requires-python = ">=3.12"`. Everything passed, but the project's stated target is 3.12; if 3.12 is the deployment runtime, pin/test against it in CI to avoid 3.14-only surprises.
+
+---
+
+## 3. What's Good
+
+- **Clean strategy pattern.** `MarketDataSource` ABC with two interchangeable implementations; downstream code reads only the cache. Matches `MARKET_INTERFACE.md` faithfully.
+- **Separation of math from plumbing.** `GBMSimulator` is pure and synchronous (no asyncio, no I/O), making the GBM/correlation logic directly unit-testable; `SimulatorDataSource` is the thin async adapter. This is the right seam and it's well tested (98%).
+- **Correct GBM.** Itô correction term present, `dt` derived from trading-time, prices stay positive (10k-step test), 2dp rounding on the wire while full precision is kept internally (no P&L drift).
+- **PriceCache** is minimal, correct, lock-guarded, 100% covered; the monotonic `version` counter cleanly drives SSE change detection.
+- **Resilience** is handled where it matters: both background loops wrap their work in `try/except` and continue; `stop()` is idempotent and swallows `CancelledError`.
+- **`PriceUpdate`** is frozen/slotted and its wire shape matches `PLAN.md` §6 (epoch-seconds timestamp exception included).
+
+---
+
+## 4. Recommended Actions (in priority order)
+
+1. ~~**Fix the Massive timestamp divisor** (`/1000.0` → `/1_000_000_000`) and correct the masking test.~~ (HIGH) — ✅ **DONE 2026-06-06**
+2. ~~**Add SSE tests** for `stream.py` covering initial snapshot, empty-cache hold-open, change-detection, and disconnect.~~ (MEDIUM) — ✅ **DONE 2026-06-06**
+3. Build `create_stream_router` to instantiate its own `APIRouter`. (LOW) — open
+4. Decide where ticker normalization and the simulator universe guard live; make the two sources consistent. (LOW) — open
+5. Drop the deprecated `event_loop_policy` fixture; refresh the summary's coverage numbers. (INFO) — open
+
+The two priority items (1–2) are resolved, so the Massive path and the live frontend chart can now be trusted on the timestamp/SSE contracts. The remaining items (3–5) are low-severity polish and do not block the simulator-mode demo, which is the default path and is in good shape.

@@ -8,13 +8,16 @@ from app.market.cache import PriceCache
 from app.market.massive_client import MassiveDataSource
 
 
-def _make_snapshot(ticker: str, price: float, timestamp_ms: int) -> MagicMock:
-    """Create a mock Massive snapshot object."""
+def _make_snapshot(ticker: str, price: float, timestamp_ns: int) -> MagicMock:
+    """Create a mock Massive snapshot object.
+
+    Massive v2 snapshot last-trade timestamps are nanoseconds.
+    """
     snap = MagicMock()
     snap.ticker = ticker
     snap.last_trade = MagicMock()
     snap.last_trade.price = price
-    snap.last_trade.timestamp = timestamp_ms
+    snap.last_trade.timestamp = timestamp_ns
     return snap
 
 
